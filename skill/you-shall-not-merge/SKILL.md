@@ -1,10 +1,10 @@
 ---
-name: review-comments
-description: Act on the PR-style review threads the user left for you in .claude-review.md at the repo root (usually written in Zed), reply under each thread, and mark the finished ones resolved. Use whenever /review-comments arrives (the editor's send task submits it through herdr, with the review file's path), or the user says "address my review comments", "I left review threads", "check the review file", "read my review", or "reply to my comments".
+name: you-shall-not-merge
+description: Act on the PR-style review threads the user left for you in .claude-review.md at the repo root (usually written in Zed), reply under each thread, and mark the finished ones resolved. Use whenever /you-shall-not-merge arrives (the editor's send task submits it through herdr, with the review file's path), or the user says "address my review comments", "I left review threads", "check the review file", "read my review", or "reply to my comments".
 argument-hint: "[path to .claude-review.md]"
 ---
 
-# Review comments
+# You shall not merge
 
 The user reviews code in Zed and leaves PR-style threads for you in
 `.claude-review.md` at the root of a repo. The send task passes that file's

@@ -1,4 +1,6 @@
-# review-comments
+# 🧙‍♂️ you-shall-not-merge
+
+> *"You shall not merge!"* — every good reviewer, and a certain grey wizard on a bridge
 
 PR-style code review for the Claude Code CLI, without leaving Zed's buffers.
 Select some lines, write a comment, send the review: Claude fixes the code and
@@ -33,7 +35,7 @@ if (coupon == "SAVE20") {
   the cursor line, and opens the file at the comment. It works in any buffer,
   including Zed's `git: diff branch` view, since Zed hands tasks the real file
   and line even from a diff.
-- **Send** (`review send`) submits `/review-comments <file>` to a Claude in
+- **Send** (`review send`) submits `/you-shall-not-merge <file>` to a Claude in
   herdr for the repo: one started at its root, else one inside it, else one in
   the folder holding it (a Claude working across sibling repos). A pane showing
   a chat beats one on Claude's agents view, and the most recently active wins a
@@ -62,7 +64,7 @@ is the place a review can live.
 - macOS notifications through `terminal-notifier` when it's installed, else
   AppleScript; elsewhere they're skipped and messages go to the task's output
 
-Without herdr, starting threads still works: run `/review-comments` in your
+Without herdr, starting threads still works: run `/you-shall-not-merge` in your
 Claude session yourself.
 
 ## Install
@@ -70,8 +72,8 @@ Claude session yourself.
 Clone the repo and link the skill into Claude Code:
 
 ```sh
-git clone https://github.com/shyamalaravind/review-comments.git
-ln -s "$PWD/review-comments/skill/review-comments" ~/.claude/skills/review-comments
+git clone https://github.com/shyamalaravind/you-shall-not-merge.git
+ln -s "$PWD/you-shall-not-merge/skill/you-shall-not-merge" ~/.claude/skills/you-shall-not-merge
 ```
 
 Add the tasks to `~/.config/zed/tasks.json`:
@@ -80,7 +82,7 @@ Add the tasks to `~/.config/zed/tasks.json`:
 [
   {
     "label": "Review: comment for Claude",
-    "command": "~/.claude/skills/review-comments/review add",
+    "command": "~/.claude/skills/you-shall-not-merge/review add",
     "allow_concurrent_runs": false,
     "reveal": "never",
     "hide": "on_success",
@@ -88,7 +90,7 @@ Add the tasks to `~/.config/zed/tasks.json`:
   },
   {
     "label": "Review: send to Claude",
-    "command": "~/.claude/skills/review-comments/review send",
+    "command": "~/.claude/skills/you-shall-not-merge/review send",
     "allow_concurrent_runs": false,
     "reveal": "never",
     "hide": "on_success",
@@ -116,8 +118,8 @@ Then bind them in `~/.config/zed/keymap.json`, for example:
 
 ## Layout
 
-- `skill/review-comments/SKILL.md`: what Claude does with the threads.
-- `skill/review-comments/review`: `add` and `send`, run by the Zed tasks.
+- `skill/you-shall-not-merge/SKILL.md`: what Claude does with the threads.
+- `skill/you-shall-not-merge/review`: `add` and `send`, run by the Zed tasks.
 
 ## License
 

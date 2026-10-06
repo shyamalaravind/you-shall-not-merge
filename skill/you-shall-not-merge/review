@@ -1,5 +1,5 @@
 #!/bin/bash
-# PR-style review threads for Claude, kept in .claude-review.md at the repo root.
+# You shall not merge: PR-style review threads for Claude, kept in .claude-review.md at the repo root.
 #
 #   review add    start a thread on the selected lines (or the cursor line) and
 #                 open the review file at the comment
@@ -12,8 +12,8 @@ set -euo pipefail
 
 say() {
   printf '%s\n' "$1"
-  terminal-notifier -title "Claude review" -message "$1" >/dev/null 2>&1 && return
-  osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title "Claude review"' -e 'end run' "$1" >/dev/null 2>&1 || true
+  terminal-notifier -title "🧙‍♂️ You shall not merge" -message "$1" >/dev/null 2>&1 && return
+  osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title "🧙‍♂️ You shall not merge"' -e 'end run' "$1" >/dev/null 2>&1 || true
 }
 die() { say "$1"; exit 1; }
 
@@ -112,7 +112,7 @@ send() {
 
   local best _rank chat _seq session pane status where
   best=$(find_claude | sort -t $'\t' -k1,1nr -k2,2nr -k3,3nr | head -n 1)
-  [[ -n $best ]] || die "No Claude in herdr for ${root##*/}. Start one there, or run /review-comments in your session."
+  [[ -n $best ]] || die "No Claude in herdr for ${root##*/}. Start one there, or run /you-shall-not-merge in your session."
   IFS=$'\t' read -r _rank chat _seq session pane status where <<<"$best"
   [[ $session == default ]] || where="$where ($session)"
   [[ $status != blocked ]] || die "Claude in herdr '$where' is waiting on a prompt. Answer it, then send again."
@@ -121,7 +121,7 @@ send() {
   ((open == 1)) && threads=thread
   sent="Sent $open $threads to Claude in herdr '$where'"
   ((chat)) || sent="$sent, as a new background session from its agents view"
-  if herdr --session "$session" agent prompt "$pane" "/review-comments $review" --wait --until working --timeout 8000 >/dev/null 2>&1; then
+  if herdr --session "$session" agent prompt "$pane" "/you-shall-not-merge $review" --wait --until working --timeout 8000 >/dev/null 2>&1; then
     say "$sent."
   else
     die "$sent, but it hasn't started. Check that pane; don't send twice."
