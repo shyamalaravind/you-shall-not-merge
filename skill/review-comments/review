@@ -1,0 +1,135 @@
+#!/bin/bash
+# PR-style review threads for Claude, kept in .claude-review.md at the repo root.
+#
+#   review add    start a thread on the selected lines (or the cursor line) and
+#                 open the review file at the comment
+#   review send   hand the open threads to this repo's Claude in herdr
+#
+# Both run as Zed tasks (tasks.json), which export ZED_FILE, ZED_ROW,
+# ZED_SELECTED_TEXT and ZED_WORKTREE_ROOT. ZED_ROW is the first line of the
+# selection, in the real file even when the selection is in a diff view.
+set -euo pipefail
+
+say() {
+  printf '%s\n' "$1"
+  terminal-notifier -title "Claude review" -message "$1" >/dev/null 2>&1 && return
+  osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title "Claude review"' -e 'end run' "$1" >/dev/null 2>&1 || true
+}
+die() { say "$1"; exit 1; }
+
+here=${ZED_FILE:+$(dirname "$ZED_FILE")}
+here=${here:-${ZED_WORKTREE_ROOT:-$PWD}}
+root=$(git -C "$here" rev-parse --show-toplevel 2>/dev/null) || die "Not in a git repository: $here"
+review=$root/.claude-review.md
+
+# Keep the review file out of git in this clone and all its worktrees.
+exclude=$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)/info/exclude
+mkdir -p "$(dirname "$exclude")"
+grep -qxF /.claude-review.md "$exclude" 2>/dev/null || printf '/.claude-review.md\n' >>"$exclude"
+
+add() {
+  [[ -n ${ZED_FILE:-} && -n ${ZED_ROW:-} ]] || die "Put the cursor in a file first."
+  [[ $ZED_FILE != "$review" ]] || die "Reply under the thread with a **me:** line instead."
+
+  local rel=${ZED_FILE#"$root"/} start=$ZED_ROW code
+  if [[ -n ${ZED_SELECTED_TEXT:-} ]]; then
+    code=$ZED_SELECTED_TEXT
+  else
+    code=$(sed -n "${start}p" "$ZED_FILE")
+  fi
+  code=${code%$'\n'} # a selection ending at the start of a line doesn't cover that line
+
+  local lines end range
+  lines=$(printf '%s\n' "$code" | wc -l | tr -d ' ')
+  end=$((start + lines - 1))
+  range=$start
+  ((end > start)) && range=$start-$end
+
+  local lang=${rel##*/} fence='```'
+  [[ $lang == *.* ]] && lang=${lang##*.} || lang=""
+  [[ $code == *'```'* ]] && fence='````'
+
+  if [[ ! -s $review ]]; then
+    printf '# Review threads for Claude\n\n<!-- One thread per ### heading. Reply under a thread with a **me:** line, then send the review again. -->\n' >"$review"
+  fi
+  [[ -z $(tail -c 1 "$review") ]] || printf '\n' >>"$review"
+  printf '\n### %s:%s\n\n%s%s\n%s\n%s\n\n**me:** \n' "$rel" "$range" "$fence" "$lang" "$code" "$fence" >>"$review"
+
+  local zed
+  zed=$(command -v zed || echo /Applications/Zed.app/Contents/MacOS/cli)
+  "$zed" -a "$review:$(wc -l <"$review" | tr -d ' '):9"
+}
+
+# A thread is open when its last entry is a **me:** comment with some text.
+open_threads() {
+  awk '
+    function close_thread() { if (who == "me" && said) n++; who = ""; said = 0 }
+    /^### /           { close_thread(); next }
+    /^\*\*me:\*\*/     { who = "me"; said = ($0 ~ /^\*\*me:\*\*[[:space:]]*[^[:space:]]/); next }
+    /^\*\*Claude:\*\*/ { who = "claude"; said = 0; next }
+    who == "me" && /[^[:space:]]/ { said = 1 }
+    END { close_thread(); print n + 0 }
+  ' "$review"
+}
+
+# The herdr Claude for this checkout, best first: one started at the repo root,
+# one in a folder inside it (not in a worktree of it), then one in the folder
+# directly holding the repo, for a Claude working across sibling repos. A pane
+# showing a chat beats one on Claude's agents view (title "… claude agents"),
+# where a prompt starts a new background session instead; then the most
+# recently active wins.
+find_claude() {
+  local session cwd seq pane status title ws top rank chat label
+  while read -r session; do
+    herdr --session "$session" agent list 2>/dev/null |
+      jq -r '.result.agents[]? | select(.agent == "claude")
+             | [(.foreground_cwd // .cwd), .state_change_seq, .pane_id, .agent_status,
+                (.terminal_title_stripped // ""), (.workspace_id // "")]
+             | @tsv' |
+      while IFS=$'\t' read -r cwd seq pane status title ws; do
+        if top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null); then
+          [[ $top == "$root" ]] || continue
+          rank=2
+          [[ $cwd == "$root" ]] && rank=3
+        elif [[ $cwd == "$(dirname "$root")" ]]; then
+          rank=1
+        else
+          continue
+        fi
+        chat=1
+        [[ $title == *"claude agents" ]] && chat=0
+        label=$(herdr --session "$session" workspace get "$ws" 2>/dev/null | jq -r '.result.workspace.label // empty')
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$rank" "$chat" "$seq" "$session" "$pane" "$status" "${label:-$ws}"
+      done
+  done < <(herdr session list 2>/dev/null | awk 'NR > 1 && $2 == "running" { print $1 }')
+}
+
+send() {
+  [[ -s $review ]] || die "No review threads yet: select some lines and start one first."
+  local open
+  open=$(open_threads)
+  ((open > 0)) || die "No open threads: each needs a **me:** comment as its last entry."
+
+  local best _rank chat _seq session pane status where
+  best=$(find_claude | sort -t $'\t' -k1,1nr -k2,2nr -k3,3nr | head -n 1)
+  [[ -n $best ]] || die "No Claude in herdr for ${root##*/}. Start one there, or run /review-comments in your session."
+  IFS=$'\t' read -r _rank chat _seq session pane status where <<<"$best"
+  [[ $session == default ]] || where="$where ($session)"
+  [[ $status != blocked ]] || die "Claude in herdr '$where' is waiting on a prompt. Answer it, then send again."
+
+  local threads=threads sent
+  ((open == 1)) && threads=thread
+  sent="Sent $open $threads to Claude in herdr '$where'"
+  ((chat)) || sent="$sent, as a new background session from its agents view"
+  if herdr --session "$session" agent prompt "$pane" "/review-comments $review" --wait --until working --timeout 8000 >/dev/null 2>&1; then
+    say "$sent."
+  else
+    die "$sent, but it hasn't started. Check that pane; don't send twice."
+  fi
+}
+
+case ${1:-} in
+  add) add ;;
+  send) send ;;
+  *) die "usage: review add|send" ;;
+esac
