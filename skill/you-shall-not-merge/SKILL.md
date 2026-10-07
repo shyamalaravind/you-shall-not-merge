@@ -17,14 +17,36 @@ The file is kept out of git through `.git/info/exclude`; never commit it, and if
 
 ## The file
 
-Each thread is a `### path:lines` heading, the code the user selected in a
-fence, then the conversation, one entry per paragraph:
+Each thread is a heading that links to the code, the code the user selected in
+a fence, then the conversation, one entry per paragraph:
 
-- `**me:**` — the user's comment, possibly several lines
-- `**Claude:**` — your reply
+````markdown
+### [src/cart.ts:16-18](src/cart.ts:16)
+
+<!-- prettier-ignore -->
+```ts
+<the selected code>
+```
+
+**me:** the user's comment, possibly several lines
+
+**Claude:** your reply
+
+**me:** 
+````
+
+- The heading's text is `path:lines`; its link is `path:first-line`, which the
+  user cmd-clicks to jump to the code. Older threads may use a plain
+  `### path:lines` heading; treat it the same.
+- `<!-- prettier-ignore -->` keeps the user's format-on-save from reflowing the
+  quoted code. Leave it in place.
+- An empty `**me:**` at the end of a thread is the user's **reply slot**: the
+  place their next comment goes. Text written on that line or the lines after
+  it is the user's reply.
 
 A thread is **open** when its last entry is a `**me:**` comment with text in it.
-It is **resolved** when your last reply ends with `✅ resolved`.
+It is **resolved** when your last reply ends with `✅ resolved`. An empty reply
+slot after your reply changes neither.
 
 `path:lines` is where the code was when the user commented. If it has moved,
 find it by the quoted code.
@@ -34,8 +56,9 @@ find it by the quoted code.
 1. **Read the file.** If it is missing or has no open threads, say so in one
    line and stop.
 2. **Clear the previous round.** Delete threads that are already resolved (your
-   reply is the last entry and ends in `✅ resolved`) and threads whose only
-   `**me:**` entry is empty. The user had a round to reopen them and didn't.
+   last reply ends in `✅ resolved` and the reply slot after it is still empty)
+   and threads whose only `**me:**` entry is empty. The user had a round to
+   reopen them and didn't.
 3. **Work each open thread.** Read enough of the surrounding code to understand
    it, then do what the comment asks: change the code, or answer the question.
    The comment is about the quoted lines but may need changes elsewhere; make
@@ -45,10 +68,12 @@ find it by the quoted code.
    two sentences: what you changed (with the new line numbers) or your answer.
    End it with ` ✅ resolved` when the thread needs nothing more from the user.
    A question back to the user stays unresolved, so it is still waiting for
-   them.
+   them. Then leave a new reply slot: a blank line and `**me:** ` (with the
+   trailing space), so the user can answer without typing any markup.
 5. **Keep the headings true.** If the code under a thread moved, update the
-   line range in its heading, so it still points at the code. Leave the path,
-   the quoted code and the user's words exactly as they are.
+   line range in its heading text and the line in its link, so it still points
+   at the code. Leave the path, the quoted code and the user's words exactly as
+   they are.
 6. **Edit the file in place** with Edit, never by rewriting all of it: the user
    has it open in Zed, which reloads an unmodified buffer but would conflict
    with a whole-file rewrite.

@@ -1,11 +1,15 @@
 #!/bin/bash
 # You shall not merge: PR-style review threads for Claude, kept in .claude-review.md at the repo root.
 #
-#   review add    start a thread on the selected lines (or the cursor line) and
-#                 open the review file at the comment
-#   review send   hand the open threads to this repo's Claude in herdr
+#   review add      comment or reply: on a line that already has a thread, or
+#                   inside the review file, put the cursor in that thread's reply
+#                   slot; anywhere else, start a thread on the selected lines (or
+#                   the cursor line)
+#   review next     jump to the next thread waiting on you
+#   review resolve  delete the thread under the cursor
+#   review send     hand the open threads to this repo's Claude in herdr
 #
-# Both run as Zed tasks (tasks.json), which export ZED_FILE, ZED_ROW,
+# All run as Zed tasks (tasks.json), which export ZED_FILE, ZED_ROW,
 # ZED_SELECTED_TEXT and ZED_WORKTREE_ROOT. ZED_ROW is the first line of the
 # selection, in the real file even when the selection is in a diff view.
 set -euo pipefail
@@ -27,9 +31,99 @@ exclude=$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)/info
 mkdir -p "$(dirname "$exclude")"
 grep -qxF /.claude-review.md "$exclude" 2>/dev/null || printf '/.claude-review.md\n' >>"$exclude"
 
+open_in_zed() {
+  local zed
+  zed=$(command -v zed || echo /Applications/Zed.app/Contents/MacOS/cli)
+  "$zed" -a "$review:$1:${2:-1}"
+}
+
+# One line per thread, tab-separated:
+#   heading_line  last_line  slot_line  state  file  start  end
+# A heading is "### [path:lines](path:start)", or "### path:lines" in older files.
+# slot_line is a trailing empty "**me:**" (0 if none). state is "open" (your
+# comment waits for Claude), "asked" (Claude replied and it's your turn),
+# "resolved", or "draft" (nothing written yet).
+threads() {
+  [[ -s $review ]] || return 0
+  awk '
+    function flush() {
+      if (!h) return
+      state = (who == "me" && said) ? "open" : (who == "claude" ? (resolved ? "resolved" : "asked") : "draft")
+      printf "%d\t%d\t%d\t%s\t%s\t%d\t%d\n", h, last, slot, state, file, s, e
+    }
+    fence { if ($0 ~ /^(```|~~~)/) fence = 0; last = NR; next }
+    /^### / {
+      flush(); h = NR; last = NR; who = ""; said = 0; slot = 0; resolved = 0
+      label = substr($0, 5)
+      if (label ~ /^\[/) { label = substr(label, 2); sub(/\].*/, "", label) }
+      n = split(label, parts, ":"); range = parts[n]
+      file = substr(label, 1, length(label) - length(range) - 1)
+      split(range, r, "-"); s = r[1] + 0; e = (r[2] != "" ? r[2] + 0 : s)
+      next
+    }
+    !h { next }
+    /^(```|~~~)/ { fence = 1; last = NR; next }
+    /^\*\*me:\*\*/ {
+      last = NR
+      if ($0 ~ /^\*\*me:\*\*[[:space:]]*[^[:space:]]/) { who = "me"; said = 1; slot = 0 } else slot = NR
+      next
+    }
+    /^\*\*Claude:\*\*/ { last = NR; who = "claude"; said = 0; slot = 0; resolved = ($0 ~ /✅ resolved[[:space:]]*$/); next }
+    /^<!--/ { last = NR; next }
+    /[^[:space:]]/ {
+      last = NR
+      if (slot) { who = "me"; said = 1; slot = 0 }
+      else if (who == "claude") resolved = ($0 ~ /✅ resolved[[:space:]]*$/)
+    }
+    END { flush() }
+  ' "$review"
+}
+
+# The thread under the cursor: the one whose block holds the cursor in the
+# review file, or the one whose lines cover the cursor in a source file.
+thread_here() {
+  local rel=${ZED_FILE#"$root"/} row=${ZED_ROW:-0}
+  if [[ ${ZED_FILE:-} == "$review" ]]; then
+    threads | awk -F '\t' -v r="$row" '$1 <= r { p = $0 } END { print p }'
+  else
+    threads | awk -F '\t' -v f="$rel" -v r="$row" '$5 == f && $6 <= r && r <= $7 { p = $0 } END { print p }'
+  fi
+}
+
+# Rewrite the review file in place, so Zed keeps the same file and reloads it.
+rewrite() {
+  local tmp
+  tmp=$(mktemp)
+  awk "$@" "$review" >"$tmp"
+  cat "$tmp" >"$review"
+  rm -f "$tmp"
+}
+
+# Put the cursor in the thread's empty "**me:** " slot, adding the slot first if
+# the thread doesn't end in one (Prettier strips its trailing space; restore it).
+reply_in() {
+  local h last slot
+  IFS=$'\t' read -r h last slot _ <<<"$1"
+  if ((slot == 0)); then
+    rewrite -v at="$last" '{ print } NR == at { print ""; print "**me:** " }'
+    slot=$((last + 2))
+  else
+    rewrite -v at="$slot" 'NR == at { print "**me:** "; next } { print }'
+  fi
+  sleep 0.3 # let Zed reload the changed file before it moves the cursor
+  open_in_zed "$slot" 9
+}
+
 add() {
   [[ -n ${ZED_FILE:-} && -n ${ZED_ROW:-} ]] || die "Put the cursor in a file first."
-  [[ $ZED_FILE != "$review" ]] || die "Reply under the thread with a **me:** line instead."
+
+  local pick
+  pick=$(thread_here)
+  if [[ -n $pick ]]; then
+    reply_in "$pick"
+    return
+  fi
+  [[ $ZED_FILE != "$review" ]] || die "Put the cursor inside a thread to reply to it."
 
   local rel=${ZED_FILE#"$root"/} start=$ZED_ROW code
   if [[ -n ${ZED_SELECTED_TEXT:-} ]]; then
@@ -45,31 +139,50 @@ add() {
   range=$start
   ((end > start)) && range=$start-$end
 
-  local lang=${rel##*/} fence='```'
+  local lang=${rel##*/} fence='```' target=$rel:$start
   [[ $lang == *.* ]] && lang=${lang##*.} || lang=""
   [[ $code == *'```'* ]] && fence='````'
+  [[ $target == *' '* ]] && target="<$target>"
 
   if [[ ! -s $review ]]; then
-    printf '# Review threads for Claude\n\n<!-- One thread per ### heading. Reply under a thread with a **me:** line, then send the review again. -->\n' >"$review"
+    printf '# Review threads for Claude\n\n<!-- One thread per ### heading. Write after a **me:** line, then send the review. -->\n' >"$review"
   fi
   [[ -z $(tail -c 1 "$review") ]] || printf '\n' >>"$review"
-  printf '\n### %s:%s\n\n%s%s\n%s\n%s\n\n**me:** \n' "$rel" "$range" "$fence" "$lang" "$code" "$fence" >>"$review"
+  # The heading links to the code; prettier-ignore keeps format-on-save off the quote.
+  printf '\n### [%s:%s](%s)\n\n<!-- prettier-ignore -->\n%s%s\n%s\n%s\n\n**me:** \n' \
+    "$rel" "$range" "$target" "$fence" "$lang" "$code" "$fence" >>"$review"
 
-  local zed
-  zed=$(command -v zed || echo /Applications/Zed.app/Contents/MacOS/cli)
-  "$zed" -a "$review:$(wc -l <"$review" | tr -d ' '):9"
+  open_in_zed "$(wc -l <"$review" | tr -d ' ')" 9
 }
 
-# A thread is open when its last entry is a **me:** comment with some text.
-open_threads() {
-  awk '
-    function close_thread() { if (who == "me" && said) n++; who = ""; said = 0 }
-    /^### /           { close_thread(); next }
-    /^\*\*me:\*\*/     { who = "me"; said = ($0 ~ /^\*\*me:\*\*[[:space:]]*[^[:space:]]/); next }
-    /^\*\*Claude:\*\*/ { who = "claude"; said = 0; next }
-    who == "me" && /[^[:space:]]/ { said = 1 }
-    END { close_thread(); print n + 0 }
-  ' "$review"
+# The next thread where Claude replied and it's your turn, after the cursor when
+# it's in the review file, wrapping round.
+next() {
+  local row=0 pick
+  [[ ${ZED_FILE:-} == "$review" ]] && row=${ZED_ROW:-0}
+  pick=$(threads | awk -F '\t' -v r="$row" '
+    $4 == "asked" { if (first == "") first = $0; if ($1 > r && after == "") after = $0 }
+    END { print (after != "" ? after : first) }')
+  if [[ -z $pick ]]; then
+    say "Nothing is waiting for you."
+    return
+  fi
+  reply_in "$pick"
+}
+
+resolve() {
+  local pick h last label
+  pick=$(thread_here)
+  [[ -n $pick ]] || die "Put the cursor in a thread, or on a line that has one, to resolve it."
+  IFS=$'\t' read -r h last _ _ label _ <<<"$pick"
+  label=$(sed -n "${h}p" "$review" | sed -e 's/^### //' -e 's/^\[//' -e 's/\].*//')
+  # Drop the thread and the blank lines after it.
+  rewrite -v h="$h" -v l="$last" '
+    NR >= h && NR <= l { next }
+    NR > l && !done && /^[[:space:]]*$/ { next }
+    NR > l { done = 1 }
+    { print }'
+  say "Resolved $label."
 }
 
 # The herdr Claude for this checkout, best first: one started at the repo root,
@@ -107,8 +220,8 @@ find_claude() {
 send() {
   [[ -s $review ]] || die "No review threads yet: select some lines and start one first."
   local open
-  open=$(open_threads)
-  ((open > 0)) || die "No open threads: each needs a **me:** comment as its last entry."
+  open=$(threads | awk -F '\t' '$4 == "open"' | wc -l | tr -d ' ')
+  ((open > 0)) || die "No open threads: write after a **me:** line first."
 
   local best _rank chat _seq session pane status where
   best=$(find_claude | sort -t $'\t' -k1,1nr -k2,2nr -k3,3nr | head -n 1)
@@ -130,6 +243,8 @@ send() {
 
 case ${1:-} in
   add) add ;;
+  next) next ;;
+  resolve) resolve ;;
   send) send ;;
-  *) die "usage: review add|send" ;;
+  *) die "usage: review add|next|resolve|send" ;;
 esac
